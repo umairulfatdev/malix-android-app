@@ -20,16 +20,10 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      - name: Setup Expo
-        uses: expo/expo-github-action@v8
-        with:
-          expo-version: latest
-          
-      - name: Setup EAS
-        uses: expo/expo-github-action@v8
-        with:
-          eas-version: latest
-          token: \${{ secrets.EXPO_TOKEN }}
+      - name: Install EAS CLI
+        run: npm install -g eas-cli
 
       - name: Build APK
         run: eas build --platform android --profile preview --non-interactive --no-wait
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
