@@ -1,4 +1,3 @@
-
 {
   "expo": {
     "name": "MALIX",
@@ -7,12 +6,24 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#000000"
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.malix.app"
     },
     "android": {
-      "package": "com.malix.app"
+      "package": "com.malix.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png",
+        "backgroundColor": "#000000"
+      }
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -21,19 +32,6 @@
       "eas": {
         "projectId": "4be47768-054b-4026-99f8-09b4d266c91b"
       }
-    },
-    "plugins": [
-      "expo-build-properties",
-      [
-        "expo-splash-screen",
-        {
-          "image": "./assets/splash-icon.png",
-          "imageWidth": 200,
-          "resizeMode": "contain",
-          "backgroundColor": "#000000"
-        }
-      ],
-      "expo-status-bar"
-    ]
+    }
   }
 }

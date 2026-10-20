@@ -1,13 +1,32 @@
-import React, { useState, useEffect } from "react";
-import { StyleSheet, SafeAreaView, ActivityIndicator, View, Text, Platform, StatusBar } from "react-native";
+import React, { useState, useEffect, useRef } from "react";
+import { StyleSheet, SafeAreaView, ActivityIndicator, View, Text, Platform, StatusBar, BackHandler } from "react-native";
 import { WebView } from "react-native-webview";
 
-// 👇 YAHAN APNI VERCEL WALI LIVE WEBSITE KA URL DAALO
-const WEBSITE_URL = "https://malix-umairulfatdev.vercel.app"; 
+const WEBSITE_URL = "https://malix-fawn.vercel.app/"; 
 
 export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
+  const webViewRef = useRef<WebView>(null);
+  const [canGoBack, setCanGoBack] = useState(false);
+
+  // 👇 NAYA: Back Button Handle karne ke liye
+  useEffect(() => {
+    const backAction = () => {
+      if (canGoBack && webViewRef.current) {
+        webViewRef.current.goBack();
+        return true; // Event handle ho gaya
+      }
+      return false; // Event handle nahi hua (app minimize/exit)
+    };
+
+    const backHandler = BackHandler.addEventListener(
+      "hardwareBackPress",
+      backAction
+    );
+
+    return () => backHandler.remove();
+  }, [canGoBack]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -21,6 +40,7 @@ export default function App() {
       )}
 
       <WebView
+        ref={webViewRef}
         source={{ uri: WEBSITE_URL }}
         style={{ flex: 1, backgroundColor: '#000000' }}
         onLoadStart={() => {
@@ -32,14 +52,22 @@ export default function App() {
           setIsLoading(false);
           setHasError(true);
         }}
-        // Video play karne ke liye zaroori hai
+        // 👇 NAYA: Back button ke liye history track karo
+        onNavigationStateChange={(navState) => {
+          setCanGoBack(navState.canGoBack);
+        }}
         allowsFullscreenVideo={true}
         javaScriptEnabled={true}
         domStorageEnabled={true}
-        // File download handle karne ke liye
         startInLoadingState={true}
-        // Status bar text hide karna
         setSupportMultipleWindows={false}
+        userAgent="Mozilla/5.0 (Linux; Android 10; SM-G975F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+        onShouldStartLoadWithRequest={(request) => {
+          if (request.url.includes("drive.google.com") || request.url.includes("download")) {
+            return false;
+          }
+          return true;
+        }}
       />
 
       {hasError && (
