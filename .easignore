@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+.expo/
+dist/
+web-build/
+.git/
+
+# Build outputs
+android/
+ios/
+
+# Environment & logs
+.env
+*.log
+.DS_Store
+
+# Large media files
+assets/videos/
+*.mp4
+*.mov
+*.avi
+*.mkv
+
+# Zip & backups
+*.zip
+*.rar
+*.7z
+*.bak
+*.backup
+*.broken-backup

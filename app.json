@@ -1,0 +1,39 @@
+
+{
+  "expo": {
+    "name": "MALIX",
+    "slug": "malix-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.malix.app"
+    },
+    "android": {
+      "package": "com.malix.app"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "4be47768-054b-4026-99f8-09b4d266c91b"
+      }
+    },
+    "plugins": [
+      "expo-build-properties",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#000000"
+        }
+      ],
+      "expo-status-bar"
+    ]
+  }
+}
