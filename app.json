@@ -4,6 +4,7 @@
     "slug": "malix-app",
     "version": "1.0.0",
     "orientation": "portrait",
+    "scheme": "malix",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
@@ -25,7 +26,11 @@
         "backgroundColor": "#000000"
       }
     },
+    "plugins": [
+      "expo-router"
+    ],
     "web": {
+      "bundler": "metro",
       "favicon": "./assets/favicon.png"
     },
     "extra": {
