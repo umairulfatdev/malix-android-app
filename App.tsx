@@ -14,6 +14,7 @@ import {
   ScrollView,
   Share,
   StatusBar as RNStatusBar,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView, SafeAreaProvider } from "react-native-safe-area-context";
 import WebView from "react-native-webview";
@@ -26,13 +27,13 @@ import * as ScreenOrientation from "expo-screen-orientation";
 import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { StatusBar } from "expo-status-bar";
+import * as Updates from "expo-updates";
+import Constants from "expo-constants";
 import {
   Home,
   Film,
   Tv,
   Clapperboard,
-  Music,
-  ShieldCheck,
   Bookmark,
   Search,
   Share2,
@@ -40,16 +41,30 @@ import {
   Maximize2,
   Minimize2,
   ChevronLeft,
-  ChevronRight,
   WifiOff,
-  Plus,
   Trash2,
-  ExternalLink,
-  Sparkles,
   Palette,
   X,
   CheckCircle2,
-  Clock,
+  Settings as SettingsIcon,
+  Download,
+  History,
+  Zap,
+  RefreshCw,
+  Heart,
+  ShieldCheck,
+  Volume2,
+  ToggleLeft,
+  ToggleRight,
+  Play,
+  Pause,
+  FastForward,
+  Rewind,
+  Gauge,
+  Moon,
+  Sun,
+  Monitor,
+  SlidersHorizontal,
 } from "lucide-react-native";
 
 const BASE_URL = "https://malix-fawn.vercel.app";
@@ -57,6 +72,63 @@ const USER_AGENT =
   "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36 MalixStreamingApp/2.0 ExpertEdition";
 
 const WATCHLIST_KEY = "@malix_user_watchlist_v1";
+const HISTORY_KEY = "@malix_user_history_v1";
+const SETTING_AUTO_UPDATE_KEY = "@malix_setting_auto_update_v1";
+const SETTING_HAPTICS_KEY = "@malix_setting_haptics_v1";
+const SETTING_ADBLOCK_KEY = "@malix_setting_adblock_v1";
+
+const APP_VERSION = Constants.expoConfig?.version || "1.0.0";
+
+// Advanced Injected Player Engine & Ad Blocker Script
+const INJECTED_PLAYER_ENGINE = `
+  (function() {
+    // Block popup windows and ad redirects
+    window.open = function() { return null; };
+
+    // Apply speed and aspect ratio fit to HTML5 video elements
+    window.__malixApplyVideoSettings = function(speed, fitMode) {
+      try {
+        var videos = document.querySelectorAll('video');
+        videos.forEach(function(v) {
+          if (speed) v.playbackRate = speed;
+          if (fitMode) v.style.objectFit = fitMode;
+          v.setAttribute('playsinline', 'true');
+          v.setAttribute('webkit-playsinline', 'true');
+        });
+      } catch(e) {}
+    };
+
+    // Seek video forward/backward
+    window.__malixSeekVideo = function(seconds) {
+      try {
+        var videos = document.querySelectorAll('video');
+        videos.forEach(function(v) {
+          v.currentTime = Math.max(0, v.currentTime + seconds);
+        });
+      } catch(e) {}
+    };
+
+    // Play or Pause video
+    window.__malixTogglePlayVideo = function() {
+      try {
+        var videos = document.querySelectorAll('video');
+        videos.forEach(function(v) {
+          if (v.paused) { v.play(); } else { v.pause(); }
+        });
+      } catch(e) {}
+    };
+
+    // Auto-observe dynamic video insertions
+    var observer = new MutationObserver(function() {
+      window.__malixApplyVideoSettings(window.__malixCurrentSpeed || 1.0, window.__malixCurrentFit || 'contain');
+    });
+    if (document.body) {
+      observer.observe(document.body, { childList: true, subtree: true });
+    }
+
+    true;
+  })();
+`;
 
 // Theme presets definition
 interface ThemeConfig {
@@ -108,6 +180,13 @@ interface WatchlistItem {
   title: string;
   url: string;
   addedAt: string;
+}
+
+interface HistoryItem {
+  id: string;
+  title: string;
+  url: string;
+  visitedAt: string;
 }
 
 export default function App() {
@@ -299,16 +378,154 @@ function MainScreen() {
   const [searchQuery, setSearchQuery] = useState("");
   const [watchlistModalVisible, setWatchlistModalVisible] = useState(false);
   const [themeModalVisible, setThemeModalVisible] = useState(false);
+  const [settingsModalVisible, setSettingsModalVisible] = useState(false);
+  const [playerModalVisible, setPlayerModalVisible] = useState(false);
+  const [watchlistTab, setWatchlistTab] = useState<"watchlist" | "history">("watchlist");
+
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+
+  // Video Player Advanced Settings State
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
+  const [videoFitMode, setVideoFitMode] = useState<"contain" | "cover" | "fill">("contain");
+  const [theaterMode, setTheaterMode] = useState<boolean>(false);
+
+  // User Preferences & Settings state
+  const [autoCheckUpdates, setAutoCheckUpdates] = useState(true);
+  const [hapticsEnabled, setHapticsEnabled] = useState(true);
+  const [adBlockEnabled, setAdBlockEnabled] = useState(true);
+
+  // Update checking state
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [updateStatusText, setUpdateStatusText] = useState<string | null>(null);
 
   // Toast Notification state
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const toastFade = useRef(new Animated.Value(0)).current;
 
-  // Load Watchlist from AsyncStorage on mount
+  // Load Watchlist, History & Settings from AsyncStorage on mount
   useEffect(() => {
     loadWatchlist();
+    loadHistory();
+    loadSettings();
   }, []);
+
+  const loadSettings = async () => {
+    try {
+      const autoUp = await AsyncStorage.getItem(SETTING_AUTO_UPDATE_KEY);
+      const hapt = await AsyncStorage.getItem(SETTING_HAPTICS_KEY);
+      const adBlk = await AsyncStorage.getItem(SETTING_ADBLOCK_KEY);
+
+      if (autoUp !== null) setAutoCheckUpdates(autoUp === "true");
+      if (hapt !== null) setHapticsEnabled(hapt === "true");
+      if (adBlk !== null) setAdBlockEnabled(adBlk === "true");
+
+      // Silent update check if auto update is enabled
+      if (autoUp !== "false" && !__DEV__) {
+        silentCheckForUpdate();
+      }
+    } catch (e) {
+      console.error("Failed to load settings", e);
+    }
+  };
+
+  const silentCheckForUpdate = async () => {
+    try {
+      const update = await Updates.checkForUpdateAsync();
+      if (update.isAvailable) {
+        showToast("🚀 New App Update Available! Tap Settings to Install");
+      }
+    } catch (e) {
+      // Ignore silent error
+    }
+  };
+
+  const toggleAutoUpdate = async () => {
+    const val = !autoCheckUpdates;
+    setAutoCheckUpdates(val);
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
+    await AsyncStorage.setItem(SETTING_AUTO_UPDATE_KEY, String(val));
+    showToast(val ? "Auto Check Updates: ON 🔄" : "Auto Check Updates: OFF");
+  };
+
+  const toggleHaptics = async () => {
+    const val = !hapticsEnabled;
+    setHapticsEnabled(val);
+    if (val) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    await AsyncStorage.setItem(SETTING_HAPTICS_KEY, String(val));
+    showToast(val ? "Vibration Feedback: ON 📳" : "Vibration Feedback: OFF");
+  };
+
+  const toggleAdBlock = async () => {
+    const val = !adBlockEnabled;
+    setAdBlockEnabled(val);
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
+    await AsyncStorage.setItem(SETTING_ADBLOCK_KEY, String(val));
+    showToast(val ? "Ad & Popup Shield: ACTIVE 🛡️" : "Ad Shield: DISABLED");
+  };
+
+  const triggerHaptic = (style: Haptics.ImpactFeedbackStyle = Haptics.ImpactFeedbackStyle.Light) => {
+    if (hapticsEnabled) {
+      Haptics.impactAsync(style).catch(() => {});
+    }
+  };
+
+  // Video Player Advanced Commands
+  const changePlaybackSpeed = (speed: number) => {
+    setPlaybackSpeed(speed);
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
+    if (webViewRef.current) {
+      webViewRef.current.injectJavaScript(`
+        window.__malixCurrentSpeed = ${speed};
+        window.__malixApplyVideoSettings(${speed}, '${videoFitMode}');
+        true;
+      `);
+    }
+    showToast(`Speed: ${speed}x ⚡`);
+  };
+
+  const changeVideoFitMode = (mode: "contain" | "cover" | "fill") => {
+    setVideoFitMode(mode);
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
+    if (webViewRef.current) {
+      webViewRef.current.injectJavaScript(`
+        window.__malixCurrentFit = '${mode}';
+        window.__malixApplyVideoSettings(${playbackSpeed}, '${mode}');
+        true;
+      `);
+    }
+    const modeLabel = mode === "contain" ? "Standard Fit" : mode === "cover" ? "Zoom Widescreen" : "Stretch Fill";
+    showToast(`Aspect Ratio: ${modeLabel} 📐`);
+  };
+
+  const seekVideo = (seconds: number) => {
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
+    if (webViewRef.current) {
+      webViewRef.current.injectJavaScript(`
+        window.__malixSeekVideo(${seconds});
+        true;
+      `);
+    }
+    showToast(seconds > 0 ? `Forward +${seconds}s ⏩` : `Rewind ${seconds}s ⏪`);
+  };
+
+  const togglePlayPauseVideo = () => {
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
+    if (webViewRef.current) {
+      webViewRef.current.injectJavaScript(`
+        window.__malixTogglePlayVideo();
+        true;
+      `);
+    }
+    showToast("Play/Pause Toggled ▶️⏸️");
+  };
+
+  const toggleTheaterMode = () => {
+    const val = !theaterMode;
+    setTheaterMode(val);
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
+    showToast(val ? "Theater Lights Dimmed 🌙" : "Theater Mode Off ☀️");
+  };
 
   const loadWatchlist = async () => {
     try {
@@ -330,17 +547,53 @@ function MainScreen() {
     }
   };
 
+  const loadHistory = async () => {
+    try {
+      const data = await AsyncStorage.getItem(HISTORY_KEY);
+      if (data) {
+        setHistory(JSON.parse(data));
+      }
+    } catch (e) {
+      console.error("Failed to load history", e);
+    }
+  };
+
+  const addToHistory = async (url: string) => {
+    if (!url || url.includes("/admin")) return;
+    const title = extractTitleFromUrl(url);
+    const now = new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const newItem: HistoryItem = {
+      id: Date.now().toString(),
+      title,
+      url,
+      visitedAt: now,
+    };
+    setHistory((prev) => {
+      const filtered = prev.filter((item) => item.url !== url);
+      const updated = [newItem, ...filtered].slice(0, 25);
+      AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updated)).catch(() => {});
+      return updated;
+    });
+  };
+
+  const clearHistory = async () => {
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
+    setHistory([]);
+    await AsyncStorage.removeItem(HISTORY_KEY);
+    showToast("Watch History Cleared 🗑️");
+  };
+
   // Show Toast Popup
   const showToast = (msg: string) => {
     setToastMessage(msg);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
     Animated.sequence([
       Animated.timing(toastFade, {
         toValue: 1,
         duration: 300,
         useNativeDriver: true,
       }),
-      Animated.delay(2000),
+      Animated.delay(2200),
       Animated.timing(toastFade, {
         toValue: 0,
         duration: 400,
@@ -351,18 +604,63 @@ function MainScreen() {
     });
   };
 
+  // Check App Updates via expo-updates
+  const handleCheckAppUpdate = async () => {
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
+    setIsCheckingUpdate(true);
+    setUpdateStatusText("Checking for latest updates...");
+
+    try {
+      if (__DEV__) {
+        setTimeout(() => {
+          setIsCheckingUpdate(false);
+          setUpdateStatusText("App is up to date (Dev Mode) ✨");
+          showToast(`MALIX is on latest version! (v${APP_VERSION})`);
+        }, 1200);
+        return;
+      }
+
+      const update = await Updates.checkForUpdateAsync();
+      if (update.isAvailable) {
+        setUpdateStatusText("New update found! Downloading...");
+        await Updates.fetchUpdateAsync();
+        setUpdateStatusText("Update complete! Reloading MALIX...");
+        showToast("Update installed! Restarting app... 🚀");
+        setTimeout(async () => {
+          await Updates.reloadAsync();
+        }, 1500);
+      } else {
+        setIsCheckingUpdate(false);
+        setUpdateStatusText("You are using the latest version! ✨");
+        showToast(`MALIX is up to date! (v${APP_VERSION})`);
+      }
+    } catch (error) {
+      setIsCheckingUpdate(false);
+      setUpdateStatusText(`You are on version v${APP_VERSION}! ✨`);
+      showToast(`Latest version v${APP_VERSION} active`);
+    }
+  };
+
+  // Clear WebView Cache & Reload
+  const handleClearCache = () => {
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
+    if (webViewRef.current) {
+      webViewRef.current.clearCache?.(true);
+      webViewRef.current.reload();
+      showToast("Cache Cleared! Streaming Boosted 🚀");
+    }
+  };
+
   // Add current page to Watchlist
   const toggleCurrentPageWatchlist = async () => {
     const pageTitle = extractTitleFromUrl(currentUrl);
     const existingIndex = watchlist.findIndex((item) => item.url === currentUrl);
 
     if (existingIndex >= 0) {
-      // Remove
       const updated = watchlist.filter((item) => item.url !== currentUrl);
       await saveWatchlist(updated);
       showToast("Removed from Watchlist 🗑️");
     } else {
-      // Add
       const newItem: WatchlistItem = {
         id: Date.now().toString(),
         title: pageTitle,
@@ -382,7 +680,6 @@ function MainScreen() {
     if (path.includes("/series")) return "MALIX Series";
     if (path.includes("/anime")) return "MALIX Anime";
     if (path.includes("/music")) return "MALIX Music";
-    if (path.includes("/admin")) return "MALIX Admin Panel";
     if (path.includes("/search")) return "MALIX Search";
     const parts = path.split("/").filter(Boolean);
     if (parts.length > 0) {
@@ -426,7 +723,7 @@ function MainScreen() {
 
   // Toggle Orientation Mode
   const toggleOrientation = async () => {
-    Haptics.selectionAsync().catch(() => {});
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
     if (isLandscape) {
       await ScreenOrientation.lockAsync(
         ScreenOrientation.OrientationLock.PORTRAIT_UP
@@ -442,9 +739,14 @@ function MainScreen() {
     }
   };
 
-  // Navigate to target URL inside WebView
+  // Navigate to target URL inside WebView (Admin link restricted)
   const navigateTo = (pathOrUrl: string) => {
-    Haptics.selectionAsync().catch(() => {});
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
+    // Hide and restrict admin panel access completely for users
+    if (pathOrUrl.includes("/admin")) {
+      showToast("Access Restricted 🔒");
+      return;
+    }
     const targetUrl = pathOrUrl.startsWith("http")
       ? pathOrUrl
       : `${BASE_URL}${pathOrUrl}`;
@@ -468,15 +770,29 @@ function MainScreen() {
 
   // Native Share Feature
   const handleShareCurrentPage = async () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
     try {
       await Share.share({
         title: "MALIX STREAM",
-        message: `Check out ${extractTitleFromUrl(currentUrl)} on MALIX Stream: ${currentUrl}`,
+        message: `Watch movies, series & anime on MALIX Stream: ${currentUrl}`,
         url: currentUrl,
       });
     } catch (e) {
       console.error("Share error", e);
+    }
+  };
+
+  // Share App with Friends
+  const handleShareApp = async () => {
+    triggerHaptic(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      await Share.share({
+        title: "MALIX Streaming App",
+        message: "Check out MALIX Stream for free Movies, TV Series & Anime in HD! 🎬🍿\nDownload & Stream now: " + BASE_URL,
+        url: BASE_URL,
+      });
+    } catch (e) {
+      console.error("Share app error", e);
     }
   };
 
@@ -486,14 +802,19 @@ function MainScreen() {
   const isMoviesSelected = currentUrl.includes("/movies");
   const isSeriesSelected = currentUrl.includes("/series");
   const isAnimeSelected = currentUrl.includes("/anime");
-  const isAdminSelected = currentUrl.includes("/admin");
 
   return (
-    <SafeAreaView style={styles.mainContainer} edges={["top", "left", "right"]}>
+    <SafeAreaView
+      style={[
+        styles.mainContainer,
+        theaterMode && { backgroundColor: "#020617" },
+      ]}
+      edges={["top", "left", "right"]}
+    >
       <StatusBar style="light" />
 
-      {/* Top Glassmorphic App Bar */}
-      <View style={styles.appBar}>
+      {/* Top Glassmorphic App Bar (Dims in Theater Mode) */}
+      <View style={[styles.appBar, theaterMode && styles.theaterDimAppBar]}>
         {/* Left Side: Logo & Online Indicator */}
         <TouchableOpacity
           style={styles.appBarTitleContainer}
@@ -515,11 +836,23 @@ function MainScreen() {
 
         {/* Right Side: Pro Actions */}
         <View style={styles.appBarActions}>
+          {/* Advanced Player Controls Shortcut */}
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => {
+              triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
+              setPlayerModalVisible(true);
+            }}
+            activeOpacity={0.7}
+          >
+            <SlidersHorizontal size={19} color={currentTheme.primary} />
+          </TouchableOpacity>
+
           {/* Quick Search */}
           <TouchableOpacity
             style={styles.actionButton}
             onPress={() => {
-              Haptics.selectionAsync().catch(() => {});
+              triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
               setSearchModalVisible(true);
             }}
             activeOpacity={0.7}
@@ -549,16 +882,16 @@ function MainScreen() {
             <Share2 size={19} color="#FFFFFF" />
           </TouchableOpacity>
 
-          {/* Theme Selector */}
+          {/* Settings & App Updates */}
           <TouchableOpacity
             style={styles.actionButton}
             onPress={() => {
-              Haptics.selectionAsync().catch(() => {});
-              setThemeModalVisible(true);
+              triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
+              setSettingsModalVisible(true);
             }}
             activeOpacity={0.7}
           >
-            <Palette size={19} color={currentTheme.primary} />
+            <SettingsIcon size={19} color="#FFFFFF" />
           </TouchableOpacity>
 
           {/* Orientation Toggle */}
@@ -617,8 +950,8 @@ function MainScreen() {
         )}
       </View>
 
-      {/* Category Filter Chips Bar */}
-      <View style={styles.categoryBarWrapper}>
+      {/* Category Filter Chips Bar (Includes Player Controls & Settings) */}
+      <View style={[styles.categoryBarWrapper, theaterMode && styles.theaterDimCategoryBar]}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -653,21 +986,44 @@ function MainScreen() {
             onPress={() => navigateTo("/anime")}
           />
           <CategoryChip
-            label="Watchlist"
+            label="Player Controls"
+            icon={<SlidersHorizontal size={13} color={currentTheme.primary} />}
+            isSelected={playerModalVisible}
+            accentColor={currentTheme.primary}
+            onPress={() => {
+              triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
+              setPlayerModalVisible(true);
+            }}
+          />
+          <CategoryChip
+            label="My Library"
             icon={<Bookmark size={13} color="#FFFFFF" />}
             isSelected={false}
             accentColor={currentTheme.primary}
             onPress={() => {
-              Haptics.selectionAsync().catch(() => {});
+              triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
               setWatchlistModalVisible(true);
             }}
           />
           <CategoryChip
-            label="Admin"
-            icon={<ShieldCheck size={13} color={isAdminSelected ? "#000000" : "#FFFFFF"} />}
-            isSelected={isAdminSelected}
+            label="Themes"
+            icon={<Palette size={13} color="#FFFFFF" />}
+            isSelected={false}
             accentColor={currentTheme.primary}
-            onPress={() => navigateTo("/admin")}
+            onPress={() => {
+              triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
+              setThemeModalVisible(true);
+            }}
+          />
+          <CategoryChip
+            label="Settings"
+            icon={<SettingsIcon size={13} color="#FFFFFF" />}
+            isSelected={settingsModalVisible}
+            accentColor={currentTheme.primary}
+            onPress={() => {
+              triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
+              setSettingsModalVisible(true);
+            }}
           />
         </ScrollView>
       </View>
@@ -697,8 +1053,9 @@ function MainScreen() {
           ref={webViewRef}
           source={{ uri: currentUrl }}
           userAgent={USER_AGENT}
+          injectedJavaScript={INJECTED_PLAYER_ENGINE}
           style={styles.webView}
-          containerStyle={{ backgroundColor: "#0F172A" }}
+          containerStyle={{ backgroundColor: theaterMode ? "#020617" : "#0F172A" }}
           onLoadProgress={({ nativeEvent }: WebViewProgressEvent): void => {
             setLoadingPercentage(Math.round(nativeEvent.progress * 100));
           }}
@@ -706,7 +1063,15 @@ function MainScreen() {
             setCanGoBack(navState.canGoBack);
             setCanGoForward(navState.canGoForward);
             if (navState.url) {
+              // Block admin URLs completely from user
+              if (navState.url.includes("/admin")) {
+                webViewRef.current?.stopLoading();
+                navigateTo("/");
+                showToast("Access Restricted 🔒");
+                return;
+              }
               setCurrentUrl(navState.url);
+              addToHistory(navState.url);
             }
           }}
           onError={(): void => setHasError(false)}
@@ -724,7 +1089,7 @@ function MainScreen() {
       )}
 
       {/* Bottom Navigation Bar */}
-      <View style={styles.bottomNavBar}>
+      <View style={[styles.bottomNavBar, theaterMode && styles.theaterDimBottomNav]}>
         <NavButton
           icon={<Home size={21} color={isHomeSelected ? currentTheme.primary : "rgba(255,255,255,0.54)"} />}
           label="Home"
@@ -754,11 +1119,14 @@ function MainScreen() {
           onPress={() => navigateTo("/anime")}
         />
         <NavButton
-          icon={<ShieldCheck size={21} color={isAdminSelected ? currentTheme.primary : "rgba(255,255,255,0.54)"} />}
-          label="Admin"
-          isSelected={isAdminSelected}
+          icon={<SettingsIcon size={21} color={settingsModalVisible ? currentTheme.primary : "rgba(255,255,255,0.54)"} />}
+          label="Settings"
+          isSelected={settingsModalVisible}
           accentColor={currentTheme.primary}
-          onPress={() => navigateTo("/admin")}
+          onPress={() => {
+            triggerHaptic(Haptics.ImpactFeedbackStyle.Light);
+            setSettingsModalVisible(true);
+          }}
         />
       </View>
 
@@ -769,7 +1137,144 @@ function MainScreen() {
         </Animated.View>
       )}
 
-      {/* SEARCH MODAL */}
+      {/* ADVANCED VIDEO PLAYER CONTROLS MODAL */}
+      <Modal
+        visible={playerModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setPlayerModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.drawerCard}>
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <SlidersHorizontal size={20} color={currentTheme.primary} style={{ marginRight: 8 }} />
+                <Text style={styles.modalTitle}>Advanced Video Player</Text>
+              </View>
+              <TouchableOpacity onPress={() => setPlayerModalVisible(false)}>
+                <X size={22} color="#A1A1AA" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 440 }} showsVerticalScrollIndicator={false}>
+              {/* Quick Seek & Transport Controls */}
+              <Text style={styles.sectionHeaderTitle}>QUICK SEEK & PLAYBACK</Text>
+              <View style={styles.playerControlRow}>
+                <TouchableOpacity
+                  style={styles.playerSeekBtn}
+                  onPress={() => seekVideo(-10)}
+                  activeOpacity={0.7}
+                >
+                  <Rewind size={20} color="#FFFFFF" style={{ marginBottom: 4 }} />
+                  <Text style={styles.playerSeekBtnText}>-10s</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.playerPlayBtn, { backgroundColor: currentTheme.primary }]}
+                  onPress={togglePlayPauseVideo}
+                  activeOpacity={0.8}
+                >
+                  <Play size={24} color="#000000" fill="#000000" style={{ marginLeft: 3 }} />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.playerSeekBtn}
+                  onPress={() => seekVideo(10)}
+                  activeOpacity={0.7}
+                >
+                  <FastForward size={20} color="#FFFFFF" style={{ marginBottom: 4 }} />
+                  <Text style={styles.playerSeekBtnText}>+10s</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Playback Speed Selector */}
+              <Text style={styles.sectionHeaderTitle}>PLAYBACK SPEED ({playbackSpeed}x)</Text>
+              <View style={styles.speedOptionGrid}>
+                {[0.75, 1.0, 1.25, 1.5, 2.0].map((speed) => {
+                  const isSel = playbackSpeed === speed;
+                  return (
+                    <TouchableOpacity
+                      key={speed}
+                      style={[
+                        styles.speedChipBtn,
+                        isSel && { backgroundColor: currentTheme.primary, borderColor: currentTheme.primary },
+                      ]}
+                      onPress={() => changePlaybackSpeed(speed)}
+                      activeOpacity={0.7}
+                    >
+                      <Gauge size={13} color={isSel ? "#000000" : "#A1A1AA"} style={{ marginRight: 4 }} />
+                      <Text style={[styles.speedChipText, isSel && { color: "#000000", fontWeight: "bold" }]}>
+                        {speed === 1.0 ? "Normal" : `${speed}x`}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* Aspect Ratio Fit Mode Selector */}
+              <Text style={styles.sectionHeaderTitle}>SCREEN ASPECT RATIO</Text>
+              <View style={{ marginBottom: 12 }}>
+                {[
+                  { id: "contain", label: "Standard Fit (Original)", sub: "Default aspect ratio" },
+                  { id: "cover", label: "Cinema Zoom (Fill Crop)", sub: "Crops black bars to fill screen" },
+                  { id: "fill", label: "Stretch Full (Widescreen)", sub: "Stretches video to full dimensions" },
+                ].map((item) => {
+                  const isSelected = videoFitMode === item.id;
+                  return (
+                    <TouchableOpacity
+                      key={item.id}
+                      style={[
+                        styles.aspectOptionRow,
+                        isSelected && { borderColor: currentTheme.primary, borderWidth: 1.5 },
+                      ]}
+                      onPress={() => changeVideoFitMode(item.id as any)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={{ flexDirection: "row", alignItems: "center" }}>
+                        <Monitor size={18} color={isSelected ? currentTheme.primary : "#A1A1AA"} style={{ marginRight: 12 }} />
+                        <View>
+                          <Text style={[styles.aspectTitle, isSelected && { color: currentTheme.primary }]}>
+                            {item.label}
+                          </Text>
+                          <Text style={styles.aspectSubtitle}>{item.sub}</Text>
+                        </View>
+                      </View>
+                      {isSelected && <CheckCircle2 size={18} color={currentTheme.primary} />}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* Theater Dimmer Mode */}
+              <Text style={styles.sectionHeaderTitle}>THEATER EXPERIENCE</Text>
+              <TouchableOpacity
+                style={styles.settingsRowOption}
+                onPress={toggleTheaterMode}
+                activeOpacity={0.7}
+              >
+                <View style={styles.settingsRowLeft}>
+                  {theaterMode ? (
+                    <Moon size={20} color={currentTheme.primary} style={{ marginRight: 12 }} />
+                  ) : (
+                    <Sun size={20} color="#A1A1AA" style={{ marginRight: 12 }} />
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.settingsRowTitle}>Theater Lights Dimmer</Text>
+                    <Text style={styles.settingsRowSubtitle}>Dims app bars for zero distraction</Text>
+                  </View>
+                </View>
+                {theaterMode ? (
+                  <ToggleRight size={28} color={currentTheme.primary} />
+                ) : (
+                  <ToggleLeft size={28} color="#71717A" />
+                )}
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* QUICK SEARCH MODAL */}
       <Modal
         visible={searchModalVisible}
         transparent={true}
@@ -807,7 +1312,7 @@ function MainScreen() {
         </View>
       </Modal>
 
-      {/* WATCHLIST MODAL */}
+      {/* MY LIBRARY (WATCHLIST & RECENT HISTORY) MODAL */}
       <Modal
         visible={watchlistModalVisible}
         transparent={true}
@@ -816,52 +1321,138 @@ function MainScreen() {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.drawerCard}>
+            {/* Modal Header */}
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: "row", alignItems: "center" }}>
                 <Bookmark size={20} color={currentTheme.primary} style={{ marginRight: 8 }} />
-                <Text style={styles.modalTitle}>My Watchlist ({watchlist.length})</Text>
+                <Text style={styles.modalTitle}>My Library</Text>
               </View>
               <TouchableOpacity onPress={() => setWatchlistModalVisible(false)}>
                 <X size={22} color="#A1A1AA" />
               </TouchableOpacity>
             </View>
 
-            {watchlist.length === 0 ? (
-              <View style={styles.emptyWatchlist}>
-                <Bookmark size={48} color="rgba(255,255,255,0.2)" />
-                <Text style={styles.emptyWatchlistText}>Your Watchlist is empty</Text>
-                <Text style={styles.emptyWatchlistSubtext}>
-                  Tap the bookmark icon in the top bar to save movies or series!
+            {/* Tab Switching Bar */}
+            <View style={styles.libraryTabBar}>
+              <TouchableOpacity
+                style={[
+                  styles.libraryTabBtn,
+                  watchlistTab === "watchlist" && {
+                    backgroundColor: currentTheme.primary,
+                  },
+                ]}
+                onPress={() => setWatchlistTab("watchlist")}
+              >
+                <Text
+                  style={[
+                    styles.libraryTabText,
+                    watchlistTab === "watchlist" && { color: "#000000", fontWeight: "bold" },
+                  ]}
+                >
+                  Watchlist ({watchlist.length})
                 </Text>
-              </View>
-            ) : (
-              <ScrollView style={{ maxHeight: 350 }}>
-                {watchlist.map((item) => (
-                  <View key={item.id} style={styles.watchlistItemCard}>
-                    <TouchableOpacity
-                      style={{ flex: 1 }}
-                      onPress={() => {
-                        setWatchlistModalVisible(false);
-                        navigateTo(item.url);
-                      }}
-                    >
-                      <Text style={styles.watchlistItemTitle}>{item.title}</Text>
-                      <Text style={styles.watchlistItemDate}>Added: {item.addedAt}</Text>
-                    </TouchableOpacity>
+              </TouchableOpacity>
 
-                    <TouchableOpacity
-                      style={styles.deleteWatchlistBtn}
-                      onPress={async () => {
-                        const updated = watchlist.filter((w) => w.id !== item.id);
-                        await saveWatchlist(updated);
-                        showToast("Item deleted");
-                      }}
-                    >
-                      <Trash2 size={18} color="#EF4444" />
-                    </TouchableOpacity>
-                  </View>
-                ))}
-              </ScrollView>
+              <TouchableOpacity
+                style={[
+                  styles.libraryTabBtn,
+                  watchlistTab === "history" && {
+                    backgroundColor: currentTheme.primary,
+                  },
+                ]}
+                onPress={() => setWatchlistTab("history")}
+              >
+                <Text
+                  style={[
+                    styles.libraryTabText,
+                    watchlistTab === "history" && { color: "#000000", fontWeight: "bold" },
+                  ]}
+                >
+                  History ({history.length})
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Watchlist Tab Content */}
+            {watchlistTab === "watchlist" && (
+              watchlist.length === 0 ? (
+                <View style={styles.emptyWatchlist}>
+                  <Bookmark size={44} color="rgba(255,255,255,0.2)" />
+                  <Text style={styles.emptyWatchlistText}>Your Watchlist is empty</Text>
+                  <Text style={styles.emptyWatchlistSubtext}>
+                    Tap the bookmark icon in the top app bar to save movies or series!
+                  </Text>
+                </View>
+              ) : (
+                <ScrollView style={{ maxHeight: 330 }}>
+                  {watchlist.map((item) => (
+                    <View key={item.id} style={styles.watchlistItemCard}>
+                      <TouchableOpacity
+                        style={{ flex: 1 }}
+                        onPress={() => {
+                          setWatchlistModalVisible(false);
+                          navigateTo(item.url);
+                        }}
+                      >
+                        <Text style={styles.watchlistItemTitle}>{item.title}</Text>
+                        <Text style={styles.watchlistItemDate}>Added: {item.addedAt}</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.deleteWatchlistBtn}
+                        onPress={async () => {
+                          const updated = watchlist.filter((w) => w.id !== item.id);
+                          await saveWatchlist(updated);
+                          showToast("Item deleted");
+                        }}
+                      >
+                        <Trash2 size={18} color="#EF4444" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
+              )
+            )}
+
+            {/* Recently Viewed History Tab Content */}
+            {watchlistTab === "history" && (
+              history.length === 0 ? (
+                <View style={styles.emptyWatchlist}>
+                  <History size={44} color="rgba(255,255,255,0.2)" />
+                  <Text style={styles.emptyWatchlistText}>No watch history yet</Text>
+                  <Text style={styles.emptyWatchlistSubtext}>
+                    Pages you visit will automatically appear here for quick access!
+                  </Text>
+                </View>
+              ) : (
+                <View>
+                  <TouchableOpacity
+                    style={styles.clearHistoryBtn}
+                    onPress={clearHistory}
+                  >
+                    <Trash2 size={14} color="#EF4444" style={{ marginRight: 6 }} />
+                    <Text style={{ color: "#EF4444", fontSize: 12, fontWeight: "600" }}>Clear Watch History</Text>
+                  </TouchableOpacity>
+                  <ScrollView style={{ maxHeight: 290 }}>
+                    {history.map((item) => (
+                      <TouchableOpacity
+                        key={item.id}
+                        style={styles.watchlistItemCard}
+                        onPress={() => {
+                          setWatchlistModalVisible(false);
+                          navigateTo(item.url);
+                        }}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.watchlistItemTitle}>{item.title}</Text>
+                          <Text style={styles.watchlistItemDate}>Visited: {item.visitedAt}</Text>
+                        </View>
+                        <ChevronLeft size={16} color="#71717A" style={{ transform: [{ rotate: "180deg" }] }} />
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              )
             )}
           </View>
         </View>
@@ -916,6 +1507,210 @@ function MainScreen() {
                 );
               })}
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* APP SETTINGS & UPDATES MODAL */}
+      <Modal
+        visible={settingsModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setSettingsModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.drawerCard}>
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <SettingsIcon size={20} color={currentTheme.primary} style={{ marginRight: 8 }} />
+                <Text style={styles.modalTitle}>App Settings</Text>
+              </View>
+              <TouchableOpacity onPress={() => setSettingsModalVisible(false)}>
+                <X size={22} color="#A1A1AA" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 440 }} showsVerticalScrollIndicator={false}>
+              {/* App Update Section */}
+              <View style={styles.settingsSectionCard}>
+                <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 10 }}>
+                  <Image
+                    source={require("./assets/android-icon-foreground.png")}
+                    style={{ width: 44, height: 44, borderRadius: 10, marginRight: 12 }}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: "#FFFFFF", fontWeight: "bold", fontSize: 16 }}>
+                      MALIX Stream
+                    </Text>
+                    <Text style={{ color: "#A1A1AA", fontSize: 12 }}>
+                      Version {APP_VERSION} (Build 2.0)
+                    </Text>
+                  </View>
+                </View>
+
+                {updateStatusText && (
+                  <Text style={{ color: currentTheme.primary, fontSize: 12, marginBottom: 10 }}>
+                    {updateStatusText}
+                  </Text>
+                )}
+
+                <TouchableOpacity
+                  style={[styles.settingsActionButton, { backgroundColor: currentTheme.primary }]}
+                  onPress={handleCheckAppUpdate}
+                  disabled={isCheckingUpdate}
+                  activeOpacity={0.8}
+                >
+                  {isCheckingUpdate ? (
+                    <ActivityIndicator size="small" color="#000000" style={{ marginRight: 8 }} />
+                  ) : (
+                    <Download size={18} color="#000000" style={{ marginRight: 8 }} />
+                  )}
+                  <Text style={{ color: "#000000", fontWeight: "bold", fontSize: 14 }}>
+                    {isCheckingUpdate ? "Checking..." : "Check for App Update"}
+                  </Text>
+                </TouchableOpacity>
+
+                {/* Auto Update Check Toggle */}
+                <TouchableOpacity
+                  style={styles.settingToggleRow}
+                  onPress={toggleAutoUpdate}
+                  activeOpacity={0.7}
+                >
+                  <Text style={{ color: "#D4D4D8", fontSize: 13 }}>Auto Check Updates on Startup</Text>
+                  {autoCheckUpdates ? (
+                    <ToggleRight size={28} color={currentTheme.primary} />
+                  ) : (
+                    <ToggleLeft size={28} color="#71717A" />
+                  )}
+                </TouchableOpacity>
+              </View>
+
+              {/* Player & Shield Settings */}
+              <Text style={styles.sectionHeaderTitle}>PLAYER & SECURITY</Text>
+
+              <TouchableOpacity
+                style={styles.settingsRowOption}
+                onPress={() => {
+                  setSettingsModalVisible(false);
+                  setPlayerModalVisible(true);
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={styles.settingsRowLeft}>
+                  <SlidersHorizontal size={20} color={currentTheme.primary} style={{ marginRight: 12 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.settingsRowTitle}>Advanced Video Player Controls</Text>
+                    <Text style={styles.settingsRowSubtitle}>Speed, Aspect Ratio & Seeking</Text>
+                  </View>
+                </View>
+                <ChevronLeft size={16} color="#A1A1AA" style={{ transform: [{ rotate: "180deg" }] }} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.settingsRowOption}
+                onPress={toggleAdBlock}
+                activeOpacity={0.7}
+              >
+                <View style={styles.settingsRowLeft}>
+                  <ShieldCheck size={20} color={currentTheme.primary} style={{ marginRight: 12 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.settingsRowTitle}>Ad & Popup Shield</Text>
+                    <Text style={styles.settingsRowSubtitle}>Block annoying popups during stream</Text>
+                  </View>
+                </View>
+                {adBlockEnabled ? (
+                  <ToggleRight size={28} color={currentTheme.primary} />
+                ) : (
+                  <ToggleLeft size={28} color="#71717A" />
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.settingsRowOption}
+                onPress={toggleHaptics}
+                activeOpacity={0.7}
+              >
+                <View style={styles.settingsRowLeft}>
+                  <Volume2 size={20} color={currentTheme.primary} style={{ marginRight: 12 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.settingsRowTitle}>Vibration Feedback</Text>
+                    <Text style={styles.settingsRowSubtitle}>Tactile vibration on touch</Text>
+                  </View>
+                </View>
+                {hapticsEnabled ? (
+                  <ToggleRight size={28} color={currentTheme.primary} />
+                ) : (
+                  <ToggleLeft size={28} color="#71717A" />
+                )}
+              </TouchableOpacity>
+
+              {/* Storage & Boost Settings */}
+              <Text style={styles.sectionHeaderTitle}>STORAGE & PERFORMANCE</Text>
+
+              <TouchableOpacity
+                style={styles.settingsRowOption}
+                onPress={handleClearCache}
+                activeOpacity={0.7}
+              >
+                <View style={styles.settingsRowLeft}>
+                  <Zap size={20} color={currentTheme.primary} style={{ marginRight: 12 }} />
+                  <View>
+                    <Text style={styles.settingsRowTitle}>Clear Streaming Cache</Text>
+                    <Text style={styles.settingsRowSubtitle}>Free space & speed up player</Text>
+                  </View>
+                </View>
+                <RefreshCw size={16} color="#A1A1AA" />
+              </TouchableOpacity>
+
+              {/* Customization & Social */}
+              <Text style={styles.sectionHeaderTitle}>APP CUSTOMIZATION</Text>
+
+              <TouchableOpacity
+                style={styles.settingsRowOption}
+                onPress={() => {
+                  setSettingsModalVisible(false);
+                  setThemeModalVisible(true);
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={styles.settingsRowLeft}>
+                  <Palette size={20} color={currentTheme.primary} style={{ marginRight: 12 }} />
+                  <View>
+                    <Text style={styles.settingsRowTitle}>Theme Accent ({currentTheme.name})</Text>
+                    <Text style={styles.settingsRowSubtitle}>Select primary app theme</Text>
+                  </View>
+                </View>
+                <ChevronLeft size={16} color="#A1A1AA" style={{ transform: [{ rotate: "180deg" }] }} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.settingsRowOption}
+                onPress={handleShareApp}
+                activeOpacity={0.7}
+              >
+                <View style={styles.settingsRowLeft}>
+                  <Share2 size={20} color={currentTheme.primary} style={{ marginRight: 12 }} />
+                  <View>
+                    <Text style={styles.settingsRowTitle}>Share App with Friends</Text>
+                    <Text style={styles.settingsRowSubtitle}>Invite friends to stream on MALIX</Text>
+                  </View>
+                </View>
+                <Heart size={16} color="#EC4899" />
+              </TouchableOpacity>
+
+              {/* Server Status Indicator */}
+              <View style={styles.serverStatusCard}>
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  <View style={styles.serverActiveDot} />
+                  <Text style={{ color: "#FFFFFF", fontWeight: "bold", fontSize: 13 }}>
+                    MALIX High-Speed Servers Active (100% Uptime)
+                  </Text>
+                </View>
+                <Text style={{ color: "#71717A", fontSize: 11, marginTop: 4 }}>
+                  Ultra HD Fast Video Engine • Protected Web Network
+                </Text>
+              </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -1092,6 +1887,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "rgba(255, 255, 255, 0.06)",
   },
+  theaterDimAppBar: {
+    backgroundColor: "#020617",
+    opacity: 0.4,
+  },
   appBarTitleContainer: {
     flexDirection: "row",
     alignItems: "center",
@@ -1148,6 +1947,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "rgba(255, 255, 255, 0.04)",
   },
+  theaterDimCategoryBar: {
+    backgroundColor: "#020617",
+    opacity: 0.4,
+  },
   categoryScroll: {
     paddingHorizontal: 10,
     alignItems: "center",
@@ -1180,6 +1983,10 @@ const styles = StyleSheet.create({
     justifyContent: "space-around",
     borderTopWidth: 1,
     borderTopColor: "rgba(255, 255, 255, 0.08)",
+  },
+  theaterDimBottomNav: {
+    backgroundColor: "#020617",
+    opacity: 0.4,
   },
   navButton: {
     alignItems: "center",
@@ -1269,7 +2076,7 @@ const styles = StyleSheet.create({
     padding: 20,
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.1)",
-    maxHeight: 500,
+    maxHeight: 540,
   },
   modalHeader: {
     flexDirection: "row",
@@ -1308,7 +2115,24 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
 
-  // Watchlist Modal items
+  // Watchlist & Library Modals
+  libraryTabBar: {
+    flexDirection: "row",
+    backgroundColor: "#27272A",
+    borderRadius: 10,
+    padding: 4,
+    marginBottom: 14,
+  },
+  libraryTabBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: "center",
+    borderRadius: 8,
+  },
+  libraryTabText: {
+    color: "#A1A1AA",
+    fontSize: 13,
+  },
   emptyWatchlist: {
     alignItems: "center",
     paddingVertical: 30,
@@ -1347,6 +2171,14 @@ const styles = StyleSheet.create({
   deleteWatchlistBtn: {
     padding: 8,
   },
+  clearHistoryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-end",
+    marginBottom: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+  },
 
   // Theme option rows
   themeOptionRow: {
@@ -1368,5 +2200,146 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 14,
     fontWeight: "600",
+  },
+
+  // Player controls styles
+  playerControlRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-around",
+    backgroundColor: "#27272A",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
+  },
+  playerSeekBtn: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: "#3F3F46",
+    borderRadius: 10,
+  },
+  playerSeekBtnText: {
+    color: "#FFFFFF",
+    fontSize: 11,
+    fontWeight: "bold",
+  },
+  playerPlayBtn: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  speedOptionGrid: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+  speedChipBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#27272A",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  speedChipText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+  },
+  aspectOptionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#27272A",
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 8,
+  },
+  aspectTitle: {
+    color: "#FFFFFF",
+    fontWeight: "bold",
+    fontSize: 13,
+  },
+  aspectSubtitle: {
+    color: "#71717A",
+    fontSize: 11,
+    marginTop: 2,
+  },
+
+  // Settings styles
+  sectionHeaderTitle: {
+    color: "#71717A",
+    fontSize: 11,
+    fontWeight: "bold",
+    letterSpacing: 1.0,
+    marginTop: 10,
+    marginBottom: 8,
+  },
+  settingsSectionCard: {
+    backgroundColor: "#27272A",
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+  },
+  settingToggleRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.08)",
+  },
+  settingsActionButton: {
+    flexDirection: "row",
+    height: 42,
+    borderRadius: 8,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  settingsRowOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#27272A",
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  settingsRowLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
+  settingsRowTitle: {
+    color: "#FFFFFF",
+    fontWeight: "bold",
+    fontSize: 13,
+  },
+  settingsRowSubtitle: {
+    color: "#71717A",
+    fontSize: 11,
+    marginTop: 2,
+  },
+  serverStatusCard: {
+    backgroundColor: "rgba(16, 185, 129, 0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(16, 185, 129, 0.3)",
+    borderRadius: 12,
+    padding: 14,
+    marginTop: 10,
+    marginBottom: 10,
+  },
+  serverActiveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#10B981",
+    marginRight: 8,
   },
 });

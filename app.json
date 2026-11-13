@@ -19,6 +19,7 @@
     },
     "android": {
       "package": "com.malix.app",
+      "minSdkVersion": 24,
       "adaptiveIcon": {
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
@@ -28,7 +29,16 @@
     },
     "plugins": [
       "expo-router",
-      "expo-build-properties",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 24,
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35
+          }
+        }
+      ],
       "expo-splash-screen",
       "expo-screen-orientation"
     ],
@@ -36,10 +46,19 @@
       "bundler": "metro",
       "favicon": "./assets/android-icon-foreground.png"
     },
+    "updates": {
+      "url": "https://u.expo.dev/4be47768-054b-4026-99f8-09b4d266c91b"
+    },
     "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
       "eas": {
         "projectId": "4be47768-054b-4026-99f8-09b4d266c91b"
       }
-    }
+    },
+    "owner": "umair37"
   }
 }
